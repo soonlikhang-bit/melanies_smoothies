@@ -8,9 +8,7 @@ from snowflake.snowpark.functions import col
 # App Header
 # -----------------------------
 st.title(":cup_with_straw: Customize Your Smoothie! :cup_with_straw:")
-st.write(
-    """Choose the fruits you want in your custom Smoothie!"""
-)
+st.write("Choose the fruits you want in your custom Smoothie!")
 
 name_on_order = st.text_input("Name on Smoothie:")
 st.write("The name on your Smoothie will be:", name_on_order)
@@ -21,8 +19,7 @@ st.write("The name on your Smoothie will be:", name_on_order)
 cnx = st.connection("snowflake")
 session = cnx.session()
 
-# Ensure the SEARCH_ON column exists and is correctly populated
-# 1) Add column if it doesn't exist
+# 1) Add SEARCH_ON column if it doesn't exist (single statement per call)
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.fruit_options
     ADD COLUMN IF NOT EXISTS SEARCH_ON STRING
@@ -35,28 +32,34 @@ session.sql("""
     WHERE SEARCH_ON IS NULL
 """).collect()
 
-# 3) Apply requested specific mappings
-#    Apple -> Apples, Blueberry -> Blueberries, Jackfruit -> Jack Fruit,
-#    Raspberry -> Raspberries, Strawberry -> Strawberries
-session.sql("""
-    UPDATE smoothies.public.fruit_options SET SEARCH_ON = 'Apples'      WHERE FRUIT_NAME = 'Apple';
-    UPDATE smoothies.public.fruit_options SET SEARCH_ON = 'Blueberries' WHERE FRUIT_NAME = 'Blueberry';
-    UPDATE smoothies.public.fruit_options SET SEARCH_ON = 'Jack Fruit'  WHERE FRUIT_NAME = 'Jackfruit';
-    UPDATE smoothies.public.fruit_options SET SEARCH_ON = 'Raspberries' WHERE FRUIT_NAME = 'Raspberry';
-    UPDATE smoothies.public.fruit_options SET SEARCH_ON = 'Strawberries'WHERE FRUIT_NAME = 'Strawberry';
-""").collect()
+# 3) Apply requested specific mappings (run each UPDATE as its own statement)
+mappings = {
+    "Apple": "Apples",
+    "Blueberry": "Blueberries",
+    "Jackfruit": "Jack Fruit",
+    "Raspberry": "Raspberries",
+    "Strawberry": "Strawberries",
+}
+
+for src, dst in mappings.items():
+    # Escape single quotes just in case (defensive)
+    src_safe = src.replace("'", "''")
+    dst_safe = dst.replace("'", "''")
+    session.sql(f"""
+        UPDATE smoothies.public.fruit_options
+        SET SEARCH_ON = '{dst_safe}'
+        WHERE FRUIT_NAME = '{src_safe}'
+    """).collect()
 
 # -----------------------------
-# Load fruit options (both label and search key)
+# Load fruit options (label + search key)
 # -----------------------------
-# Keep FRUIT_NAME for display; use SEARCH_ON for API lookups
 options_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
-).collect()  # returns a list of Row; easy to convert to Python structures
+).collect()
 
-# Build helper structures for Streamlit multiselect and lookups
-fruit_labels = [row["FRUIT_NAME"] for row in options_df]  # display names
-label_to_search = {row["FRUIT_NAME"]: row["SEARCH_ON"] for row in options_df}  # lookup
+fruit_labels = [row["FRUIT_NAME"] for row in options_df]  # display labels
+label_to_search = {row["FRUIT_NAME"]: row["SEARCH_ON"] for row in options_df}  # lookup for API
 
 # -----------------------------
 # Ingredient picker
@@ -71,15 +74,12 @@ ingredients_list = st.multiselect(
 # Handle selection, show nutrition, and submit order
 # -----------------------------
 if ingredients_list:
-    # Prepare a space-separated list for the order record (use labels)
     ingredients_string = " ".join(ingredients_list)
 
     for fruit_label in ingredients_list:
-        # Get the API search term from SEARCH_ON
         search_term = label_to_search.get(fruit_label, fruit_label)
 
         st.subheader(f"{fruit_label} Nutrition Information")
-        # Use SEARCH_ON in the API call to match SmoothieFroot spellings
         try:
             smoothiefroot_response = requests.get(
                 f"https://my.smoothiefroot.com/api/fruit/{search_term}",
@@ -98,7 +98,7 @@ if ingredients_list:
         except Exception as e:
             st.error(f"Error fetching data for '{fruit_label}' (searched as '{search_term}'): {e}")
 
-    # Prepare INSERT statement safely (escape single quotes)
+    # Prepare INSERT statement safely
     safe_ingredients = ingredients_string.replace("'", "''")
     safe_name = (name_on_order or "").replace("'", "''")
 
@@ -115,6 +115,7 @@ if ingredients_list:
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+
 
 
 
