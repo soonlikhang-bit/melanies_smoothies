@@ -57,6 +57,8 @@ for src, dst in mappings.items():
 options_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
 ).collect()
+st.dataframe(data=options_df, use_container_width=True)
+st.stop()
 
 fruit_labels = [row["FRUIT_NAME"] for row in options_df]  # display labels
 label_to_search = {row["FRUIT_NAME"]: row["SEARCH_ON"] for row in options_df}  # lookup for API
