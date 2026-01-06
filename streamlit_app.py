@@ -1,6 +1,4 @@
 
-
-
 # Import python packages
 import streamlit as st
 import requests
@@ -22,7 +20,7 @@ st.write("The name on your Smoothie will be:", name_on_order)
 cnx = st.connection("snowflake")
 session = cnx.session()
 
-# 1) Add SEARCH_ON column if it doesn't exist (single statement per call)
+# 1) Add SEARCH_ON column if it doesn't exist
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.fruit_options
     ADD COLUMN IF NOT EXISTS SEARCH_ON STRING
@@ -35,7 +33,7 @@ session.sql("""
     WHERE SEARCH_ON IS NULL
 """).collect()
 
-# 3) Apply requested specific mappings (run each UPDATE as its own statement)
+# 3) Apply requested specific mappings
 mappings = {
     'Apple': 'Apples',
     'Blueberry': 'Blueberries',
@@ -45,7 +43,6 @@ mappings = {
 }
 
 for src, dst in mappings.items():
-    # Escape single quotes just in case (defensive)
     src_safe = src.replace("'", "''")
     dst_safe = dst.replace("'", "''")
     session.sql(f"""
@@ -55,23 +52,19 @@ for src, dst in mappings.items():
     """).collect()
 
 # -----------------------------
-# Load fruit options (label + search key)
+# Load fruit options
 # -----------------------------
-# Snowpark DataFrame with both columns
 snow_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
 )
 
-# Convert to Pandas for display & for building Python lists/dicts
+# Convert to Pandas
 pd_df: pd.DataFrame = snow_df.to_pandas()
 
-# Debug view like the attachment (uses Pandas)
-if debug_mode:
-    st.dataframe(pd_df, use_container_width=True)
-    st.info("Debug mode is ON. Turn it off to continue the app.")
-    st.stop()  # Pause just like the lab screenshot
+# Show DataFrame for verification (optional)
+st.dataframe(pd_df, use_container_width=True)
 
-# Build UI labels directly from Pandas
+# Build UI labels
 fruit_labels = pd_df["FRUIT_NAME"].tolist()
 
 # -----------------------------
@@ -90,33 +83,25 @@ if ingredients_list:
     ingredients_string = " ".join(ingredients_list)
 
     for fruit_label in ingredients_list:
-        # 🔎 Use Pandas .loc to fetch the SEARCH_ON term for the chosen label
-        # This mirrors the lab instruction to use .loc with pd_df.
-        row_match = pd_df.loc[pd_df["FRUIT_NAME"] == fruit_label, "SEARCH_ON"]
-        if not row_match.empty:
-            search_term = str(row_match.iat[0])
-        else:
-            # Fallback to the label if somehow the mapping isn't found
-            search_term = fruit_label
+        # ✅ Use .loc and .iloc[0] to get SEARCH_ON value
+        search_on = pd_df.loc[pd_df['FRUIT_NAME'] == fruit_label, 'SEARCH_ON'].iloc[0]
 
+        # Show helper line
+        st.write(f"The search value for {fruit_label} is {search_on}.")
+
+        # Show nutrition info
         st.subheader(f"{fruit_label} Nutrition Information")
         try:
-            smoothiefroot_response = requests.get(
-                f"https://my.smoothiefroot.com/api/fruit/{search_term}",
+            response = requests.get(
+                f"https://my.smoothiefroot.com/api/fruit/{search_on}",
                 timeout=15,
             )
-            if smoothiefroot_response.ok:
-                st.dataframe(
-                    data=smoothiefroot_response.json(),
-                    use_container_width=True,
-                )
+            if response.ok:
+                st.dataframe(response.json(), use_container_width=True)
             else:
-                st.warning(
-                    f"Could not fetch nutrition info for '{fruit_label}' "
-                    f"(searched as '{search_term}'). Status: {smoothiefroot_response.status_code}"
-                )
+                st.warning(f"Could not fetch info for '{fruit_label}' (searched as '{search_on}').")
         except Exception as e:
-            st.error(f"Error fetching data for '{fruit_label}' (searched as '{search_term}'): {e}")
+            st.error(f"Error fetching data for '{fruit_label}': {e}")
 
     # Prepare INSERT statement safely
     safe_ingredients = ingredients_string.replace("'", "''")
@@ -127,12 +112,12 @@ if ingredients_list:
         VALUES ('{safe_ingredients}', '{safe_name}')
     """
 
-    time_to_insert = st.button("Submit Order")
-
-    if time_to_insert:
+    # Submit button
+    if st.button("Submit Order"):
         try:
             session.sql(my_insert_stmt).collect()
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+
 
