@@ -39,11 +39,11 @@ session.sql("""
 
 # 3) Apply requested specific mappings (run each UPDATE as its own statement)
 mappings = {
-    "Apple": "Apples",
-    "Blueberry": "Blueberries",
-    "Jackfruit": "Jack Fruit",
-    "Raspberry": "Raspberries",
-    "Strawberry": "Strawberries",
+    'Apple': 'Apples',
+    'Blueberry': 'Blueberries',
+    'Jackfruit': 'Jack Fruit',
+    'Raspberry': 'Raspberries',
+    'Strawberry': 'Strawberries',
 }
 
 for src, dst in mappings.items():
