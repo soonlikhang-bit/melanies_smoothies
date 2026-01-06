@@ -100,7 +100,6 @@ if ingredients_list:
         try:
             response = requests.get(
                 f"https://my.smoothiefroot.com/api/fruit/{search_on}",
-                timeout=15,
             )
             if response.ok:
                 st.dataframe(response.json(), use_container_width=True)
