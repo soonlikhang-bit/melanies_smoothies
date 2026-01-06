@@ -14,6 +14,9 @@ st.write("Choose the fruits you want in your custom Smoothie!")
 name_on_order = st.text_input("Name on Smoothie:")
 st.write("The name on your Smoothie will be:", name_on_order)
 
+# Optional: a debug switch to mirror the lab step
+debug_mode = st.checkbox("Show fruit options (Pandas) and pause (debug)", value=False)
+
 # -----------------------------
 # Snowflake connection & setup
 # -----------------------------
@@ -43,7 +46,6 @@ mappings = {
 }
 
 for src, dst in mappings.items():
-    # Escape single quotes just in case (defensive)
     src_safe = src.replace("'", "''")
     dst_safe = dst.replace("'", "''")
     session.sql(f"""
@@ -53,20 +55,25 @@ for src, dst in mappings.items():
     """).collect()
 
 # -----------------------------
-# Load fruit options (label + search key)
+# Load fruit options (Snowpark -> Pandas)
 # -----------------------------
-options_df = session.table("smoothies.public.fruit_options").select(
+# IMPORTANT: Do NOT .collect() before .to_pandas()
+snow_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
-).collect()
-#st.dataframe(data=options_df, use_container_width=True)
-#st.stop()
+)
 
-pd_df=options_df.to_pandas()
-st.dataframe(pd_df)
-st.stop()
+# Convert to Pandas for display/inspection and to build Python lists/dicts
+pd_df: pd.DataFrame = snow_df.to_pandas()
 
-fruit_labels = [row["FRUIT_NAME"] for row in options_df]  # display labels
-label_to_search = {row["FRUIT_NAME"]: row["SEARCH_ON"] for row in options_df}  # lookup for API
+# Debug view like the lab step
+if debug_mode:
+    st.dataframe(pd_df, use_container_width=True)
+    st.info("Debug mode is ON. Turn it off to continue the app.")
+    st.stop()
+
+# Build UI labels and API lookup dict FROM Pandas (no collect needed)
+fruit_labels = pd_df["FRUIT_NAME"].tolist()
+label_to_search = dict(zip(pd_df["FRUIT_NAME"], pd_df["SEARCH_ON"]))
 
 # -----------------------------
 # Ingredient picker
@@ -122,6 +129,8 @@ if ingredients_list:
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+``
+
 
 
 
