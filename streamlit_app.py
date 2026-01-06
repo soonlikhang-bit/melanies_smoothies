@@ -39,9 +39,29 @@ session.sql("""
 search_mappings = {
     'Apples': 'Apple',
     'Blueberries': 'Blueberry',
+    'Cantaloupe': 'Cantaloupe',
+    'Dragon Fruit': 'Dragonfruit',
+    'Elderberries': 'Elderberry',
+    'Figs': 'Figs',
+    'Guava': 'Guava',
+    'Honeydew': 'Honeydew',
+    'Jackfruit': 'Jackfruit',
+    'Kiwi': 'Kiwi',
+    'Lime': 'Lime',
+    'Mango': 'Mango',
+    'Nectarine': 'Nectarine',
+    'Orange': 'Orange',
+    'Papaya': 'Papaya',
+    'Quince': 'Quince',
     'Raspberries': 'Raspberry',
     'Strawberries': 'Strawberry',
-    'Jack Fruit': 'Jackfruit',   # API often uses 'Jackfruit' without a space
+    'Tangerine': 'Tangerine',
+    'Ugli Fruit': 'Ugli Fruit (Jamaican Tangelo)',
+    'Vanilla Fruit': 'Vanilla Fruit',
+    'Watermelon': 'Watermelon',
+    'Ximenia': 'Ximenia (Hog Plum)',
+    'Yerba Mate': 'Yerba Mate',
+    'Ziziphus Jujube': 'Ziziphus Jujube',
     # Add other special cases here if needed, e.g., 'Dragon Fruit': 'Dragon Fruit' (no change)
 }
 
