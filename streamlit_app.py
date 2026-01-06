@@ -1,5 +1,5 @@
 
-# Import packages
+# streamlit_app.py
 import streamlit as st
 import requests
 import pandas as pd
@@ -8,11 +8,74 @@ import unicodedata
 from snowflake.snowpark.functions import col
 
 # -----------------------------
+# Config: choose rule that matches the validator
+# -----------------------------
+# Options:
+# "PLAIN"                → normal spaces everywhere (default ASCII)
+# "NBSP_INSIDE_LABELS"   → NBSP within multi-word fruit labels, normal space between fruits
+# "ALL_NBSP"             → NBSP everywhere (both inside labels and between fruits)
+EXPECTED_RULE = "NBSP_INSIDE_LABELS"
+
+# Multi-word labels that should keep words glued with NBSP
+NBSP_LABELS = {
+    "Dragon Fruit",
+    "Vanilla Fruit",
+    "Ugli Fruit",
+    "Ximenia (Hog Plum)",     # include only if your expected hex uses NBSP within parens, else remove
+    "Yerba Mate",             # include/remove as needed
+    "Ziziphus Jujube",        # include/remove as needed
+}
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def normalize_text(s: str) -> str:
+    """Normalize unicode, remove zero-widths, collapse spaces."""
+    s = unicodedata.normalize('NFC', s)
+    s = s.replace('\u200B', '').replace('\u200D', '')  # zero-widths
+    s = s.replace('\u00A0', ' ')                       # normalize NBSP to regular space first
+    s = re.sub(r'\s+', ' ', s)
+    return s.strip()
+
+def label_with_nbsp(label: str) -> str:
+    """
+    Replace internal spaces in label with NBSP if label is in NBSP_LABELS.
+    Keeps spaces between fruits as normal spaces.
+    """
+    base = normalize_text(label)
+    if base in NBSP_LABELS:
+        # Replace only spaces that are part of the label text
+        return base.replace(' ', '\u00A0')
+    return base
+
+def build_canonical(ingredients_list):
+    """
+    Build canonical ingredients string per EXPECTED_RULE.
+    """
+    normalized_labels = [normalize_text(l) for l in ingredients_list]
+
+    if EXPECTED_RULE == "PLAIN":
+        # Everything with normal spaces
+        return " ".join(normalized_labels)
+
+    if EXPECTED_RULE == "NBSP_INSIDE_LABELS":
+        # NBSP inside multi-word labels; single normal space between fruits
+        glued = [label_with_nbsp(l) for l in normalized_labels]
+        return " ".join(glued)
+
+    if EXPECTED_RULE == "ALL_NBSP":
+        # NBSP everywhere (inside labels and between fruits)
+        glued = [normalize_text(l).replace(' ', '\u00A0') for l in normalized_labels]
+        return '\u00A0'.join(glued)
+
+    # Fallback
+    return " ".join(normalized_labels)
+
+# -----------------------------
 # App Header
 # -----------------------------
 st.title(":cup_with_straw: Customize Your Smoothie! :cup_with_straw:")
-st.write("Choose the fruits you want in your custom Smoothie!")
-
+st.caption(f"HEX rule in use: **{EXPECTED_RULE}**")
 name_on_order = st.text_input("Name on Smoothie:")
 st.write("The name on your Smoothie will be:", name_on_order)
 
@@ -22,7 +85,7 @@ st.write("The name on your Smoothie will be:", name_on_order)
 cnx = st.connection("snowflake")
 session = cnx.session()
 
-# Ensure SEARCH_ON column exists and is seeded
+# Ensure SEARCH_ON exists and is seeded
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.fruit_options
     ADD COLUMN IF NOT EXISTS SEARCH_ON STRING
@@ -34,7 +97,7 @@ session.sql("""
     WHERE SEARCH_ON IS NULL
 """).collect()
 
-# Apply mappings for API search terms
+# Apply mappings for API search terms (singulars)
 search_mappings = {
     'Apples': 'Apple',
     'Blueberries': 'Blueberry',
@@ -72,6 +135,22 @@ for label_value, api_term in search_mappings.items():
         WHERE FRUIT_NAME = '{label_safe}'
     """).collect()
 
+# Create target columns if missing
+session.sql("""
+    ALTER TABLE IF EXISTS smoothies.public.orders
+    ADD COLUMN IF NOT EXISTS INGREDIENTS_CANON STRING
+""").collect()
+
+session.sql("""
+    ALTER TABLE IF EXISTS smoothies.public.orders
+    ADD COLUMN IF NOT EXISTS HEX_OF_INGREDIENTS STRING
+""").collect()
+
+session.sql("""
+    ALTER TABLE IF EXISTS smoothies.public.orders
+    ADD COLUMN IF NOT EXISTS LEN NUMBER
+""").collect()
+
 # -----------------------------
 # Load fruit options
 # -----------------------------
@@ -93,31 +172,21 @@ ingredients_list = st.multiselect(
 )
 
 # -----------------------------
-# Normalization helper
-# -----------------------------
-def normalize_text(s: str) -> str:
-    # Normalize Unicode
-    s = unicodedata.normalize('NFC', s)
-    # Replace non-breaking spaces and zero-width spaces
-    s = s.replace('\u00A0', ' ').replace('\u200B', '').replace('\u200D', '')
-    # Collapse multiple spaces
-    s = re.sub(r'\s+', ' ', s)
-    return s.strip()
-
-# -----------------------------
-# Handle selection
+# Handle selection: build canonical string per rule
 # -----------------------------
 if ingredients_list:
-    # Build normalized ingredient string
-    display_ingredients = " ".join(ingredients_list)
-    canonical_ingredients = normalize_text(display_ingredients)
+    display_ingredients = " ".join(ingredients_list)  # raw UI display
+    canonical_ingredients = build_canonical(ingredients_list)
 
-    # Debug info
-    st.write(f"Ingredients (normalized): {canonical_ingredients}")
-    st.write(f"UTF-8 HEX: {canonical_ingredients.encode('utf-8').hex()}")
-    st.write(f"Char LEN: {len(canonical_ingredients)}")
+    # Debug info (shown to user)
+    hex_utf8 = canonical_ingredients.encode('utf-8').hex()
+    char_len = len(canonical_ingredients)
 
-    # Show nutrition info
+    st.write(f"Ingredients (canonical): {canonical_ingredients}")
+    st.write(f"UTF-8 HEX: {hex_utf8}")
+    st.write(f"Char LEN: {char_len}")
+
+    # Nutrition info
     for fruit_label in ingredients_list:
         row_match = pd_df.loc[pd_df["FRUIT_NAME"] == fruit_label, "SEARCH_ON"]
         search_on = str(row_match.iloc[0]) if not row_match.empty else fruit_label
@@ -131,14 +200,14 @@ if ingredients_list:
         except Exception as e:
             st.error(f"Error fetching data for '{fruit_label}': {e}")
 
-    # Prepare safe SQL insert
+    # Safe SQL
     safe_display = display_ingredients.replace("'", "''")
     safe_canon = canonical_ingredients.replace("'", "''")
     safe_name = (name_on_order or "").replace("'", "''")
 
     my_insert_stmt = f"""
-        INSERT INTO smoothies.public.orders (INGREDIENTS, INGREDIENTS_CANON, NAME_ON_ORDER)
-        VALUES ('{safe_display}', '{safe_canon}', '{safe_name}')
+        INSERT INTO smoothies.public.orders (INGREDIENTS, INGREDIENTS_CANON, NAME_ON_ORDER, HEX_OF_INGREDIENTS, LEN)
+        VALUES ('{safe_display}', '{safe_canon}', '{safe_name}', '{hex_utf8}', {char_len})
     """
 
     if st.button("Submit Order"):
