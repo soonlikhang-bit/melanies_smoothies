@@ -8,63 +8,51 @@ import unicodedata
 from snowflake.snowpark.functions import col
 
 # -----------------------------
-# Config: choose rule that matches the validator
+# Choose the rule that matches the validator
 # -----------------------------
-# Options:
-# "PLAIN"                → normal spaces everywhere (default ASCII)
-# "NBSP_INSIDE_LABELS"   → NBSP within multi-word fruit labels, normal space between fruits
-# "ALL_NBSP"             → NBSP everywhere (both inside labels and between fruits)
-EXPECTED_RULE = "NBSP_INSIDE_LABELS"
+# "PLAIN"               → normal spaces everywhere
+# "NBSP_INSIDE_LABELS"  → NBSP within multi-word labels, normal space between fruits
+# "ALL_NBSP"            → NBSP everywhere (inside labels AND between fruits)
+EXPECTED_RULE = "PLAIN"
 
-# Multi-word labels that should keep words glued with NBSP
+# Multi-word labels that (optionally) get NBSP between words
 NBSP_LABELS = {
     "Dragon Fruit",
     "Vanilla Fruit",
     "Ugli Fruit",
-    "Ximenia (Hog Plum)",     # include only if your expected hex uses NBSP within parens, else remove
-    "Yerba Mate",             # include/remove as needed
-    "Ziziphus Jujube",        # include/remove as needed
+    # Add/remove as your validator requires
 }
 
 # -----------------------------
 # Helpers
 # -----------------------------
 def normalize_text(s: str) -> str:
-    """Normalize unicode, remove zero-widths, collapse spaces."""
+    """Unicode normalize, remove zero-widths, collapse spaces to a single ASCII space."""
     s = unicodedata.normalize('NFC', s)
-    s = s.replace('\u200B', '').replace('\u200D', '')  # zero-widths
-    s = s.replace('\u00A0', ' ')                       # normalize NBSP to regular space first
+    s = s.replace('\u200B', '').replace('\u200D', '')   # zero-width chars
+    s = s.replace('\u00A0', ' ')                        # normalize NBSP to space first
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
 def label_with_nbsp(label: str) -> str:
-    """
-    Replace internal spaces in label with NBSP if label is in NBSP_LABELS.
-    Keeps spaces between fruits as normal spaces.
-    """
+    """Use NBSP between words only for labels listed in NBSP_LABELS."""
     base = normalize_text(label)
     if base in NBSP_LABELS:
-        # Replace only spaces that are part of the label text
         return base.replace(' ', '\u00A0')
     return base
 
 def build_canonical(ingredients_list):
-    """
-    Build canonical ingredients string per EXPECTED_RULE.
-    """
+    """Construct canonical string per EXPECTED_RULE."""
     normalized_labels = [normalize_text(l) for l in ingredients_list]
 
     if EXPECTED_RULE == "PLAIN":
-        # Everything with normal spaces
         return " ".join(normalized_labels)
 
     if EXPECTED_RULE == "NBSP_INSIDE_LABELS":
-        # NBSP inside multi-word labels; single normal space between fruits
         glued = [label_with_nbsp(l) for l in normalized_labels]
         return " ".join(glued)
 
     if EXPECTED_RULE == "ALL_NBSP":
-        # NBSP everywhere (inside labels and between fruits)
         glued = [normalize_text(l).replace(' ', '\u00A0') for l in normalized_labels]
         return '\u00A0'.join(glued)
 
@@ -72,10 +60,10 @@ def build_canonical(ingredients_list):
     return " ".join(normalized_labels)
 
 # -----------------------------
-# App Header
+# UI
 # -----------------------------
 st.title(":cup_with_straw: Customize Your Smoothie! :cup_with_straw:")
-st.caption(f"HEX rule in use: **{EXPECTED_RULE}**")
+st.caption(f"Canonical rule in use: **{EXPECTED_RULE}**")
 name_on_order = st.text_input("Name on Smoothie:")
 st.write("The name on your Smoothie will be:", name_on_order)
 
@@ -97,7 +85,7 @@ session.sql("""
     WHERE SEARCH_ON IS NULL
 """).collect()
 
-# Apply mappings for API search terms (singulars)
+# Map UI labels to API singulars
 search_mappings = {
     'Apples': 'Apple',
     'Blueberries': 'Blueberry',
@@ -125,30 +113,31 @@ search_mappings = {
     'Yerba Mate': 'Yerba Mate',
     'Ziziphus Jujube': 'Ziziphus Jujube',
 }
-
 for label_value, api_term in search_mappings.items():
     label_safe = label_value.replace("'", "''")
-    api_safe = api_term.replace("'", "''")
+    api_safe   = api_term.replace("'", "''")
     session.sql(f"""
         UPDATE smoothies.public.fruit_options
         SET SEARCH_ON = '{api_safe}'
         WHERE FRUIT_NAME = '{label_safe}'
     """).collect()
 
-# Create target columns if missing
+# Create target columns (idempotent)
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.orders
     ADD COLUMN IF NOT EXISTS INGREDIENTS_CANON STRING
 """).collect()
-
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.orders
-    ADD COLUMN IF NOT EXISTS HEX_OF_INGREDIENTS STRING
+    ADD COLUMN IF NOT EXISTS HEX_UTF8 STRING
 """).collect()
-
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.orders
     ADD COLUMN IF NOT EXISTS LEN NUMBER
+""").collect()
+session.sql("""
+    ALTER TABLE IF EXISTS smoothies.public.orders
+    ADD COLUMN IF NOT EXISTS HASH64 NUMBER(19,0)
 """).collect()
 
 # -----------------------------
@@ -172,19 +161,27 @@ ingredients_list = st.multiselect(
 )
 
 # -----------------------------
-# Handle selection: build canonical string per rule
+# Handle selection: build canonical and compute HASH() in Snowflake
 # -----------------------------
 if ingredients_list:
-    display_ingredients = " ".join(ingredients_list)  # raw UI display
+    display_ingredients   = " ".join(ingredients_list)     # what the user sees
     canonical_ingredients = build_canonical(ingredients_list)
 
-    # Debug info (shown to user)
+    # Local debug values
     hex_utf8 = canonical_ingredients.encode('utf-8').hex()
     char_len = len(canonical_ingredients)
 
+    # Compute HASH() in Snowflake for the canonical string
+    # (HASH returns NUMBER(19,0), signed 64-bit)
+    safe_canon = canonical_ingredients.replace("'", "''")
+    hash_row   = session.sql(f"SELECT HASH('{safe_canon}') AS H").collect()[0]
+    hash64     = int(hash_row['H'])
+
+    # Show debug to the user
     st.write(f"Ingredients (canonical): {canonical_ingredients}")
     st.write(f"UTF-8 HEX: {hex_utf8}")
     st.write(f"Char LEN: {char_len}")
+    st.write(f"Snowflake HASH() (64-bit): {hash64}")
 
     # Nutrition info
     for fruit_label in ingredients_list:
@@ -200,22 +197,24 @@ if ingredients_list:
         except Exception as e:
             st.error(f"Error fetching data for '{fruit_label}': {e}")
 
-    # Safe SQL
+    # Prepare safe SQL insert
     safe_display = display_ingredients.replace("'", "''")
-    safe_canon = canonical_ingredients.replace("'", "''")
-    safe_name = (name_on_order or "").replace("'", "''")
+    safe_name    = (name_on_order or "").replace("'", "''")
 
-    my_insert_stmt = f"""
-        INSERT INTO smoothies.public.orders (INGREDIENTS, INGREDIENTS_CANON, NAME_ON_ORDER, HEX_OF_INGREDIENTS, LEN)
-        VALUES ('{safe_display}', '{safe_canon}', '{safe_name}', '{hex_utf8}', {char_len})
+    insert_sql = f"""
+        INSERT INTO smoothies.public.orders
+            (INGREDIENTS, INGREDIENTS_CANON, NAME_ON_ORDER, HEX_UTF8, LEN, HASH64)
+        VALUES
+            ('{safe_display}', '{safe_canon}', '{safe_name}', '{hex_utf8}', {char_len}, {hash64})
     """
 
     if st.button("Submit Order"):
         try:
-            session.sql(my_insert_stmt).collect()
+            session.sql(insert_sql).collect()
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+``
 
 
 
