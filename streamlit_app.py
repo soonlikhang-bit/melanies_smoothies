@@ -33,22 +33,25 @@ session.sql("""
     WHERE SEARCH_ON IS NULL
 """).collect()
 
-# 3) Apply requested specific mappings
-mappings = {
-    'Apple': 'Apples',
-    'Blueberry': 'Blueberries',
-    'Jackfruit': 'Jack Fruit',
-    'Raspberry': 'Raspberries',
-    'Strawberry': 'Strawberries',
+# 3) Apply search mappings so SEARCH_ON matches the API's expected spellings (singulars)
+#    If your FRUIT_NAME values are plural in the UI (Apples, Blueberries, etc.),
+#    this mapping will set SEARCH_ON to the singular form for API calls.
+search_mappings = {
+    'Apples': 'Apple',
+    'Blueberries': 'Blueberry',
+    'Raspberries': 'Raspberry',
+    'Strawberries': 'Strawberry',
+    'Jack Fruit': 'Jackfruit',   # API often uses 'Jackfruit' without a space
+    # Add other special cases here if needed, e.g., 'Dragon Fruit': 'Dragon Fruit' (no change)
 }
 
-for src, dst in mappings.items():
-    src_safe = src.replace("'", "''")
-    dst_safe = dst.replace("'", "''")
+for label_value, api_term in search_mappings.items():
+    label_safe = label_value.replace("'", "''")
+    api_safe = api_term.replace("'", "''")
     session.sql(f"""
         UPDATE smoothies.public.fruit_options
-        SET SEARCH_ON = '{dst_safe}'
-        WHERE FRUIT_NAME = '{src_safe}'
+        SET SEARCH_ON = '{api_safe}'
+        WHERE FRUIT_NAME = '{label_safe}'
     """).collect()
 
 # -----------------------------
@@ -61,7 +64,7 @@ snow_df = session.table("smoothies.public.fruit_options").select(
 # Convert to Pandas
 pd_df: pd.DataFrame = snow_df.to_pandas()
 
-# Show DataFrame for verification (optional)
+# Optional: show what's in the table (helps verify singular vs plural)
 st.dataframe(pd_df, use_container_width=True)
 
 # Build UI labels
@@ -83,13 +86,16 @@ if ingredients_list:
     ingredients_string = " ".join(ingredients_list)
 
     for fruit_label in ingredients_list:
-        # ✅ Use .loc and .iloc[0] to get SEARCH_ON value
-        search_on = pd_df.loc[pd_df['FRUIT_NAME'] == fruit_label, 'SEARCH_ON'].iloc[0]
+        # Use Pandas .loc to fetch SEARCH_ON term for the chosen label
+        row_match = pd_df.loc[pd_df["FRUIT_NAME"] == fruit_label, "SEARCH_ON"]
+        if not row_match.empty:
+            search_on = str(row_match.iloc[0])
+        else:
+            search_on = fruit_label  # fallback
 
-        # Show helper line
+        # Helper line (should now show singulars for plural labels)
         st.write(f"The search value for {fruit_label} is {search_on}.")
 
-        # Show nutrition info
         st.subheader(f"{fruit_label} Nutrition Information")
         try:
             response = requests.get(
@@ -99,7 +105,10 @@ if ingredients_list:
             if response.ok:
                 st.dataframe(response.json(), use_container_width=True)
             else:
-                st.warning(f"Could not fetch info for '{fruit_label}' (searched as '{search_on}').")
+                st.warning(
+                    f"Could not fetch info for '{fruit_label}' (searched as '{search_on}'). "
+                    f"Status: {response.status_code}"
+                )
         except Exception as e:
             st.error(f"Error fetching data for '{fruit_label}': {e}")
 
@@ -112,12 +121,12 @@ if ingredients_list:
         VALUES ('{safe_ingredients}', '{safe_name}')
     """
 
-    # Submit button
     if st.button("Submit Order"):
         try:
             session.sql(my_insert_stmt).collect()
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+
 
 
