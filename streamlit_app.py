@@ -1,8 +1,10 @@
 
-# Import python packages
+# Import packages
 import streamlit as st
 import requests
 import pandas as pd
+import re
+import unicodedata
 from snowflake.snowpark.functions import col
 
 # -----------------------------
@@ -20,22 +22,19 @@ st.write("The name on your Smoothie will be:", name_on_order)
 cnx = st.connection("snowflake")
 session = cnx.session()
 
-# 1) Add SEARCH_ON column if it doesn't exist
+# Ensure SEARCH_ON column exists and is seeded
 session.sql("""
     ALTER TABLE IF EXISTS smoothies.public.fruit_options
     ADD COLUMN IF NOT EXISTS SEARCH_ON STRING
 """).collect()
 
-# 2) Seed SEARCH_ON = FRUIT_NAME where SEARCH_ON is NULL
 session.sql("""
     UPDATE smoothies.public.fruit_options
     SET SEARCH_ON = FRUIT_NAME
     WHERE SEARCH_ON IS NULL
 """).collect()
 
-# 3) Apply search mappings so SEARCH_ON matches the API's expected spellings (singulars)
-#    If your FRUIT_NAME values are plural in the UI (Apples, Blueberries, etc.),
-#    this mapping will set SEARCH_ON to the singular form for API calls.
+# Apply mappings for API search terms
 search_mappings = {
     'Apples': 'Apple',
     'Blueberries': 'Blueberry',
@@ -62,7 +61,6 @@ search_mappings = {
     'Ximenia': 'Ximenia (Hog Plum)',
     'Yerba Mate': 'Yerba Mate',
     'Ziziphus Jujube': 'Ziziphus Jujube',
-    # Add other special cases here if needed, e.g., 'Dragon Fruit': 'Dragon Fruit' (no change)
 }
 
 for label_value, api_term in search_mappings.items():
@@ -80,14 +78,9 @@ for label_value, api_term in search_mappings.items():
 snow_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
 )
-
-# Convert to Pandas
 pd_df: pd.DataFrame = snow_df.to_pandas()
-
-# Optional: show what's in the table (helps verify singular vs plural)
 st.dataframe(pd_df, use_container_width=True)
 
-# Build UI labels
 fruit_labels = pd_df["FRUIT_NAME"].tolist()
 
 # -----------------------------
@@ -100,44 +93,52 @@ ingredients_list = st.multiselect(
 )
 
 # -----------------------------
-# Handle selection, show nutrition, and submit order
+# Normalization helper
+# -----------------------------
+def normalize_text(s: str) -> str:
+    # Normalize Unicode
+    s = unicodedata.normalize('NFC', s)
+    # Replace non-breaking spaces and zero-width spaces
+    s = s.replace('\u00A0', ' ').replace('\u200B', '').replace('\u200D', '')
+    # Collapse multiple spaces
+    s = re.sub(r'\s+', ' ', s)
+    return s.strip()
+
+# -----------------------------
+# Handle selection
 # -----------------------------
 if ingredients_list:
-    ingredients_string = " ".join(ingredients_list)
+    # Build normalized ingredient string
+    display_ingredients = " ".join(ingredients_list)
+    canonical_ingredients = normalize_text(display_ingredients)
 
+    # Debug info
+    st.write(f"Ingredients (normalized): {canonical_ingredients}")
+    st.write(f"UTF-8 HEX: {canonical_ingredients.encode('utf-8').hex()}")
+    st.write(f"Char LEN: {len(canonical_ingredients)}")
+
+    # Show nutrition info
     for fruit_label in ingredients_list:
-        # Use Pandas .loc to fetch SEARCH_ON term for the chosen label
         row_match = pd_df.loc[pd_df["FRUIT_NAME"] == fruit_label, "SEARCH_ON"]
-        if not row_match.empty:
-            search_on = str(row_match.iloc[0])
-        else:
-            search_on = fruit_label  # fallback
-
-        # Helper line (should now show singulars for plural labels)
-        st.write(f"The search value for {fruit_label} is {search_on}.")
-
+        search_on = str(row_match.iloc[0]) if not row_match.empty else fruit_label
         st.subheader(f"{fruit_label} Nutrition Information")
         try:
-            response = requests.get(
-                f"https://my.smoothiefroot.com/api/fruit/{search_on}",
-            )
+            response = requests.get(f"https://my.smoothiefroot.com/api/fruit/{search_on}")
             if response.ok:
                 st.dataframe(response.json(), use_container_width=True)
             else:
-                st.warning(
-                    f"Could not fetch info for '{fruit_label}' (searched as '{search_on}'). "
-                    f"Status: {response.status_code}"
-                )
+                st.warning(f"Could not fetch info for '{fruit_label}' (searched as '{search_on}'). Status: {response.status_code}")
         except Exception as e:
             st.error(f"Error fetching data for '{fruit_label}': {e}")
 
-    # Prepare INSERT statement safely
-    safe_ingredients = ingredients_string.replace("'", "''")
+    # Prepare safe SQL insert
+    safe_display = display_ingredients.replace("'", "''")
+    safe_canon = canonical_ingredients.replace("'", "''")
     safe_name = (name_on_order or "").replace("'", "''")
 
     my_insert_stmt = f"""
-        INSERT INTO smoothies.public.orders (INGREDIENTS, NAME_ON_ORDER)
-        VALUES ('{safe_ingredients}', '{safe_name}')
+        INSERT INTO smoothies.public.orders (INGREDIENTS, INGREDIENTS_CANON, NAME_ON_ORDER)
+        VALUES ('{safe_display}', '{safe_canon}', '{safe_name}')
     """
 
     if st.button("Submit Order"):
@@ -146,6 +147,7 @@ if ingredients_list:
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+
 
 
 
