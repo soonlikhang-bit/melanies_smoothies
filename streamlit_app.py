@@ -1,5 +1,6 @@
 
 
+
 # Import python packages
 import streamlit as st
 import requests
@@ -73,9 +74,8 @@ if debug_mode:
     st.info("Debug mode is ON. Turn it off to continue the app.")
     st.stop()  # Pause just like the lab screenshot
 
-# Build UI labels and API lookup dict
+# Build UI labels directly from Pandas
 fruit_labels = pd_df["FRUIT_NAME"].tolist()
-label_to_search = dict(zip(pd_df["FRUIT_NAME"], pd_df["SEARCH_ON"]))
 
 # -----------------------------
 # Ingredient picker
@@ -93,7 +93,14 @@ if ingredients_list:
     ingredients_string = " ".join(ingredients_list)
 
     for fruit_label in ingredients_list:
-        search_term = label_to_search.get(fruit_label, fruit_label)
+        # 🔎 Use Pandas .loc to fetch the SEARCH_ON term for the chosen label
+        # This mirrors the lab instruction to use .loc with pd_df.
+        row_match = pd_df.loc[pd_df["FRUIT_NAME"] == fruit_label, "SEARCH_ON"]
+        if not row_match.empty:
+            search_term = str(row_match.iat[0])
+        else:
+            # Fallback to the label if somehow the mapping isn't found
+            search_term = fruit_label
 
         st.subheader(f"{fruit_label} Nutrition Information")
         try:
@@ -131,3 +138,4 @@ if ingredients_list:
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
+
