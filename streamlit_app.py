@@ -1,4 +1,5 @@
 
+
 # Import python packages
 import streamlit as st
 import requests
@@ -14,7 +15,7 @@ st.write("Choose the fruits you want in your custom Smoothie!")
 name_on_order = st.text_input("Name on Smoothie:")
 st.write("The name on your Smoothie will be:", name_on_order)
 
-# Optional: a debug switch to mirror the lab step
+# Optional: enable a "show DataFrame & pause" view like the lab screenshot
 debug_mode = st.checkbox("Show fruit options (Pandas) and pause (debug)", value=False)
 
 # -----------------------------
@@ -46,6 +47,7 @@ mappings = {
 }
 
 for src, dst in mappings.items():
+    # Escape single quotes just in case (defensive)
     src_safe = src.replace("'", "''")
     dst_safe = dst.replace("'", "''")
     session.sql(f"""
@@ -55,23 +57,23 @@ for src, dst in mappings.items():
     """).collect()
 
 # -----------------------------
-# Load fruit options (Snowpark -> Pandas)
+# Load fruit options (label + search key)
 # -----------------------------
-# IMPORTANT: Do NOT .collect() before .to_pandas()
+# Snowpark DataFrame with both columns
 snow_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
 )
 
-# Convert to Pandas for display/inspection and to build Python lists/dicts
+# Convert to Pandas for display & for building Python lists/dicts
 pd_df: pd.DataFrame = snow_df.to_pandas()
 
-# Debug view like the lab step
+# Debug view like the attachment (uses Pandas)
 if debug_mode:
     st.dataframe(pd_df, use_container_width=True)
     st.info("Debug mode is ON. Turn it off to continue the app.")
-    st.stop()
+    st.stop()  # Pause just like the lab screenshot
 
-# Build UI labels and API lookup dict FROM Pandas (no collect needed)
+# Build UI labels and API lookup dict
 fruit_labels = pd_df["FRUIT_NAME"].tolist()
 label_to_search = dict(zip(pd_df["FRUIT_NAME"], pd_df["SEARCH_ON"]))
 
@@ -129,12 +131,3 @@ if ingredients_list:
             st.success("Your Smoothie is ordered!", icon="✅")
         except Exception as e:
             st.error(f"Order submission failed: {e}")
-
-
-
-
-
-
-
-
-
