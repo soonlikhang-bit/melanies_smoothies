@@ -58,7 +58,11 @@ for src, dst in mappings.items():
 options_df = session.table("smoothies.public.fruit_options").select(
     col("FRUIT_NAME"), col("SEARCH_ON")
 ).collect()
-st.dataframe(data=options_df, use_container_width=True)
+#st.dataframe(data=options_df, use_container_width=True)
+#st.stop()
+
+pd_df=options_df.to_pandas()
+st.dataframe(pd_df)
 st.stop()
 
 fruit_labels = [row["FRUIT_NAME"] for row in options_df]  # display labels
